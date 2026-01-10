@@ -1,0 +1,3 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://inventory-postgres:5433/inventory
