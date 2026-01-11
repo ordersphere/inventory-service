@@ -3,6 +3,8 @@ package com.thetrickuser.ordersphere.service.impl;
 import com.thetrickuser.ordersphere.domain.InventoryResponse;
 import com.thetrickuser.ordersphere.domain.ReserveInventoryRequest;
 import com.thetrickuser.ordersphere.domain.ReserveItem;
+import com.thetrickuser.ordersphere.exception.InventoryNotFoundException;
+import com.thetrickuser.ordersphere.exception.InventoryReservationFailedException;
 import com.thetrickuser.ordersphere.model.Inventory;
 import com.thetrickuser.ordersphere.model.InventoryReservation;
 import com.thetrickuser.ordersphere.model.ReservationStatus;
@@ -10,6 +12,8 @@ import com.thetrickuser.ordersphere.repository.InventoryRepository;
 import com.thetrickuser.ordersphere.repository.InventoryReservationRepository;
 import com.thetrickuser.ordersphere.service.InventoryService;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -19,6 +23,7 @@ import java.util.List;
 @Transactional
 public class InventoryServiceImpl implements InventoryService {
 
+    private static final Logger log = LoggerFactory.getLogger(InventoryServiceImpl.class);
     private final InventoryRepository inventoryRepository;
     private final InventoryReservationRepository reservationRepository;
 
@@ -32,6 +37,7 @@ public class InventoryServiceImpl implements InventoryService {
 
         Inventory inventory = inventoryRepository.findById(productId)
                 .orElseGet(() -> {
+                    log.info("Inventory record not found, creating new inventory record for productId: {}", productId);
                     Inventory inv = new Inventory();
                     inv.setProductId(productId);
                     inv.setAvailableQuantity(0);
@@ -43,6 +49,7 @@ public class InventoryServiceImpl implements InventoryService {
         inventory.setUpdatedAt(Instant.now());
 
         Inventory saved = inventoryRepository.save(inventory);
+        log.info("Inventory updated for productId: {} to available quantity: {}", productId, quantity);
 
         return new InventoryResponse(
                 saved.getProductId(),
@@ -54,14 +61,13 @@ public class InventoryServiceImpl implements InventoryService {
     @Override
     public void reserveInventory(ReserveInventoryRequest request) {
 
+        log.info("Reserving inventory for orderId: {}", request.orderId());
         for (ReserveItem item : request.items()) {
-            Inventory inventory = inventoryRepository.findById(item.productId())
-                    .orElseThrow(() ->
-                            new RuntimeException("Inventory not found for product " + item.productId())
-                    );
+            Inventory inventory = getInventory(item.productId());
 
             if (inventory.getAvailableQuantity() < item.quantity()) {
-                throw new RuntimeException("Insufficient stock for product " + item.productId());
+                log.error("Insufficient stock for product: {}", item.productId());
+                throw new InventoryReservationFailedException("Insufficient stock for product " + item.productId());
             }
 
             inventory.setAvailableQuantity(
@@ -84,12 +90,14 @@ public class InventoryServiceImpl implements InventoryService {
             reservation.setStatus(ReservationStatus.ACTIVE);
 
             reservationRepository.save(reservation);
+            log.info("Reserved {} units of product {} for orderId {}", item.quantity(), item.productId(), request.orderId());
         }
     }
 
     @Override
     public void releaseInventory(String orderId) {
 
+        log.info("Releasing inventory for orderId: {}", orderId);
         List<InventoryReservation> reservations =
                 reservationRepository.findByOrderIdAndStatus(
                         orderId, ReservationStatus.ACTIVE
@@ -97,8 +105,7 @@ public class InventoryServiceImpl implements InventoryService {
 
         for (InventoryReservation reservation : reservations) {
 
-            Inventory inventory = inventoryRepository.findById(reservation.getProductId())
-                    .orElseThrow();
+            Inventory inventory = getInventory(reservation.getProductId());
 
             inventory.setAvailableQuantity(
                     inventory.getAvailableQuantity() + reservation.getQuantity()
@@ -112,7 +119,10 @@ public class InventoryServiceImpl implements InventoryService {
 
             inventoryRepository.save(inventory);
             reservationRepository.save(reservation);
+            log.info("Released {} units of product {} for orderId {}", reservation.getQuantity(), reservation.getProductId(), orderId);
         }
+
+        log.info("Released inventory for orderId: {}", orderId);
     }
 
     @Override
@@ -125,8 +135,7 @@ public class InventoryServiceImpl implements InventoryService {
 
         for (InventoryReservation reservation : expired) {
 
-            Inventory inventory = inventoryRepository.findById(reservation.getProductId())
-                    .orElseThrow();
+            Inventory inventory = getInventory(reservation.getProductId());
 
             inventory.setAvailableQuantity(
                     inventory.getAvailableQuantity() + reservation.getQuantity()
@@ -141,6 +150,14 @@ public class InventoryServiceImpl implements InventoryService {
             inventoryRepository.save(inventory);
             reservationRepository.save(reservation);
         }
+    }
+
+    private Inventory getInventory(String productId) {
+        return inventoryRepository.findById(productId)
+                .orElseThrow(() -> {
+                    log.error("Inventory not found for product: {}", productId);
+                    return new InventoryNotFoundException("Inventory not found for product: " + productId);
+                });
     }
 
 

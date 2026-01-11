@@ -1,0 +1,11 @@
+<configuration>
+
+    <!-- Import shared config -->
+    <include resource="logging/logback-base.xml"/>
+
+    <!-- Service-specific logging -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+</configuration>
